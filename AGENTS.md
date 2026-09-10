@@ -73,6 +73,7 @@ Standard order for consistency:
 - `src/components/` — shared React components
 - `src/lib/` — utilities and shared logic
 - `src/server/` — server-only code (database, auth)
+- `test/` — for test files
 
 ## Commits
 - Conventional Commits: `feat:`, `fix:`, `chore:`, `docs:`
@@ -82,6 +83,12 @@ Standard order for consistency:
 - Title format: [<project_name>] <Title>
 - Always run `pnpm lint` and `pnpm test` before committing.
 - Keep commits focused — one logical change per commit.
+
+## File Generation
+
+When creating new TypeScript files outside of the generators, remember to:
+1. Follow existing naming conventions
+2. Add tests in the appropriate test package
 
 ## Troubleshooting
 
