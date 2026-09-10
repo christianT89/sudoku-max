@@ -91,7 +91,7 @@ export const recognizeSudoku = async (
   await worker.setParameters({
     tessedit_char_whitelist: '123456789',
     // @ts-ignore
-    tessedit_pageseg_mode: '10',
+    tessedit_pageseg_mode: '10', // Single character
   })
 
   const grid = createEmptyGrid()
@@ -145,21 +145,39 @@ export const recognizeSudoku = async (
             // Normalize the pixel: localMin becomes 0 (black), localMax becomes 255 (white)
             const normalized = ((l - localMin) / (localMax - localMin)) * 255
             
-            // Apply a slight curve to darken grays into blacks for solid numbers
-            val = normalized < 160 ? (normalized * 0.6) : 255
+            // Solid threshold to make digit lines thick and fully black
+            val = normalized < 140 ? 0 : 255
           }
 
           const offset = i * 4
           cellImgData.data[offset] = cellImgData.data[offset + 1] = cellImgData.data[offset + 2] = val
           cellImgData.data[offset + 3] = 255
-          if (val < 120) darkCount++
+          if (val === 0) darkCount++
         }
 
         cctx.putImageData(cellImgData, 0, 0)
-        if (options.debug) debugImages.push(cellCanvas.toDataURL())
+        
+        // Save raw high-contrast cell canvas for debug display
+        if (options.debug) {
+          debugImages.push(cellCanvas.toDataURL())
+        }
 
+        // Only run OCR if enough dark pixels exist to form a digit
         if (darkCount > 15) {
-          const { data } = (await worker.recognize(cellCanvas)) as any
+          // CREATE AN UPSCALED AND PADDED CANVAS FOR OPTIMAL OCR RECOGNITION
+          const ocrCanvas = document.createElement('canvas')
+          ocrCanvas.width = 100
+          ocrCanvas.height = 100
+          const ocrCtx = ocrCanvas.getContext('2d')
+          if (ocrCtx) {
+            ocrCtx.fillStyle = '#ffffff'
+            ocrCtx.fillRect(0, 0, 100, 100)
+            ocrCtx.imageSmoothingEnabled = false
+            // Center and scale the digit with generous white padding
+            ocrCtx.drawImage(cellCanvas, 15, 15, 70, 70)
+          }
+
+          const { data } = (await worker.recognize(ocrCanvas ? ocrCanvas : cellCanvas)) as any
           const text = data.text.trim()
           let val = parseInt(text, 10)
           if (isNaN(val)) {
