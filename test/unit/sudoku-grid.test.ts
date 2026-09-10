@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { sudokuGridSchema } from './sudoku-grid'
+import { sudokuGridSchema } from '../../src/lib/sudoku-grid'
 
 describe('sudokuGridSchema', () => {
   it('accepts a 9 by 9 grid with values from zero to nine', () => {
