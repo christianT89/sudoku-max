@@ -41,68 +41,56 @@ export const recognizeSudoku = async (
 ): Promise<SudokuGrid> => {
   const canvas = await loadImageToCanvas(image)
   const ctx = canvas.getContext('2d')
-  if (!ctx) {
-    throw new Error('Could not get canvas context')
-  }
+  if (!ctx) throw new Error('Could not get canvas context')
 
   const { width, height } = canvas
   const imgData = ctx.getImageData(0, 0, width, height)
   const raw = imgData.data
 
-  const isDarkPixel = (x: number, y: number) => {
-    const idx = (y * width + x) * 4
-    const r = raw[idx]
-    const g = raw[idx + 1]
-    const b = raw[idx + 2]
-    return 0.299 * r + 0.587 * g + 0.114 * b < 120
+  /**
+   * Standard grayscale conversion.
+   */
+  const getLuminance = (x: number, y: number) => {
+    const idx = (Math.floor(y) * width + Math.floor(x)) * 4
+    return 0.299 * raw[idx] + 0.587 * raw[idx + 1] + 0.114 * raw[idx + 2]
   }
 
   // Scan row/column dark pixel counts to locate the outer grid lines
   const rowDarkCounts: number[] = new Array(height).fill(0)
+  const colDarkCounts: number[] = new Array(width).fill(0)
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      if (isDarkPixel(x, y)) rowDarkCounts[y]++
+      if (getLuminance(x, y) < 150) {
+        rowDarkCounts[y]++
+        colDarkCounts[x]++
+      }
     }
   }
 
-  const colDarkCounts: number[] = new Array(width).fill(0)
-  for (let x = 0; x < width; x++) {
-    for (let y = 0; y < height; y++) {
-      if (isDarkPixel(x, y)) colDarkCounts[x]++
-    }
+  const findBorder = (counts: number[], limit: number) => {
+    const threshold = limit * 0.4
+    let start = counts.findIndex(c => c > threshold)
+    let end = counts.length - 1 - [...counts].reverse().findIndex(c => c > threshold)
+    return { start, end }
   }
 
-  // Find outer border lines (lines with high density of dark pixels)
-  const topY = rowDarkCounts.findIndex((count) => count > width * 0.4)
-  const bottomY = rowDarkCounts.length - 1 - [...rowDarkCounts].reverse().findIndex((count) => count > width * 0.4)
-  const leftX = colDarkCounts.findIndex((count) => count > height * 0.4)
-  const rightX = colDarkCounts.length - 1 - [...colDarkCounts].reverse().findIndex((count) => count > height * 0.4)
+  const rows = findBorder(rowDarkCounts, width)
+  const cols = findBorder(colDarkCounts, height)
 
-  const hasValidBorder =
-    topY !== -1 &&
-    bottomY !== -1 &&
-    leftX !== -1 &&
-    rightX !== -1 &&
-    rightX > leftX + 50 &&
-    bottomY > topY + 50
+  const hasValidBorder = rows.start !== -1 && cols.start !== -1 && (rows.end - rows.start) > 100
+  const gTop = hasValidBorder ? rows.start : 0
+  const gBottom = hasValidBorder ? rows.end : height - 1
+  const gLeft = hasValidBorder ? cols.start : 0
+  const gRight = hasValidBorder ? cols.end : width - 1
 
-  const gridLeft = hasValidBorder ? leftX : 0
-  const gridTop = hasValidBorder ? topY : 0
-  const gridRight = hasValidBorder ? rightX : width - 1
-  const gridBottom = hasValidBorder ? bottomY : height - 1
-
-  const gridW = gridRight - gridLeft
-  const gridH = gridBottom - gridTop
-  const cellW = gridW / 9
-  const cellH = gridH / 9
+  const cellW = (gRight - gLeft) / 9
+  const cellH = (gBottom - gTop) / 9
 
   const { createWorker } = await import('tesseract.js')
   const worker = await createWorker('eng')
-
   await worker.setParameters({
     tessedit_char_whitelist: '123456789',
-    // PSM 10 = Single character
-    // @ts-ignore - PSM enum value
+    // @ts-ignore
     tessedit_pageseg_mode: '10',
   })
 
@@ -113,102 +101,83 @@ export const recognizeSudoku = async (
   try {
     for (let r = 0; r < 9; r++) {
       for (let c = 0; c < 9; c++) {
-        const cellX = gridLeft + c * cellW
-        const cellY = gridTop + r * cellH
-        const innerX = Math.floor(cellX + cellW * 0.18)
-        const innerY = Math.floor(cellY + cellH * 0.18)
-        const innerW = Math.floor(cellW * 0.64)
-        const innerH = Math.floor(cellH * 0.64)
+        const x = gLeft + c * cellW + cellW * 0.18
+        const y = gTop + r * cellH + cellH * 0.18
+        const w = Math.floor(cellW * 0.64)
+        const h = Math.floor(cellH * 0.64)
 
-        if (innerW <= 0 || innerH <= 0) {
+        if (w <= 0 || h <= 0) {
           if (options.debug) debugImages.push('')
           continue
         }
 
-        // Check dark pixel count in the inner cell region
-        let darkCount = 0
         const cellCanvas = document.createElement('canvas')
-        cellCanvas.width = innerW
-        cellCanvas.height = innerH
-        const cellCtx = cellCanvas.getContext('2d')
-        if (!cellCtx) {
+        cellCanvas.width = w
+        cellCanvas.height = h
+        const cctx = cellCanvas.getContext('2d')
+        if (!cctx) {
           if (options.debug) debugImages.push('')
           continue
         }
 
-        const cellImgData = cellCtx.createImageData(innerW, innerH)
-        const cellData = cellImgData.data
-
-        for (let iy = 0; iy < innerH; iy++) {
-          for (let ix = 0; ix < innerW; ix++) {
-            const px = Math.min(width - 1, Math.max(0, innerX + ix))
-            const py = Math.min(height - 1, Math.max(0, innerY + iy))
-            const idx = (py * width + px) * 4
-            const rVal = raw[idx]
-            const gVal = raw[idx + 1]
-            const bVal = raw[idx + 2]
-            const lum = 0.299 * rVal + 0.587 * gVal + 0.114 * bVal
-
-            const dstIdx = (iy * innerW + ix) * 4
-            if (lum < 120) {
-              darkCount++
-              cellData[dstIdx] = 0
-              cellData[dstIdx + 1] = 0
-              cellData[dstIdx + 2] = 0
-              cellData[dstIdx + 3] = 255
-            } else {
-              cellData[dstIdx] = 255
-              cellData[dstIdx + 1] = 255
-              cellData[dstIdx + 2] = 255
-              cellData[dstIdx + 3] = 255
-            }
+        // Calculate local min/max to perform contrast stretching
+        let localMin = 255
+        let localMax = 0
+        for (let iy = 0; iy < h; iy++) {
+          for (let ix = 0; ix < w; ix++) {
+            const l = getLuminance(x + ix, y + iy)
+            if (l < localMin) localMin = l
+            if (l > localMax) localMax = l
           }
         }
 
-        cellCtx.putImageData(cellImgData, 0, 0)
-        if (options.debug) {
-          debugImages.push(cellCanvas.toDataURL())
-        }
+        const cellImgData = cctx.createImageData(w, h)
+        let darkCount = 0
 
-        // If dark pixel count is small, the cell is empty
-        if (darkCount < 20) {
-          grid[r][c] = 0
-          continue
-        }
-
-        // Run OCR on the thresholded digit
-        const { data } = (await worker.recognize(cellCanvas)) as any
-        const text = data.text.trim()
-        let val = parseInt(text, 10)
-
-        if (isNaN(val) || val < 1 || val > 9) {
-          const symText = data.symbols?.[0]?.text?.trim()
-          if (symText) {
-            val = parseInt(symText, 10)
+        for (let i = 0; i < w * h; i++) {
+          const ix = i % w
+          const iy = Math.floor(i / w)
+          const l = getLuminance(x + ix, y + iy)
+          
+          let val = 255
+          // Only stretch if there's significant local contrast (prevents noise)
+          if (localMax - localMin > 30) {
+            // Normalize the pixel: localMin becomes 0 (black), localMax becomes 255 (white)
+            const normalized = ((l - localMin) / (localMax - localMin)) * 255
+            
+            // Apply a slight curve to darken grays into blacks for solid numbers
+            val = normalized < 160 ? (normalized * 0.6) : 255
           }
+
+          const offset = i * 4
+          cellImgData.data[offset] = cellImgData.data[offset + 1] = cellImgData.data[offset + 2] = val
+          cellImgData.data[offset + 3] = 255
+          if (val < 120) darkCount++
         }
 
-        if (!isNaN(val) && val >= 1 && val <= 9) {
-          grid[r][c] = val
-          cluesFound++
+        cctx.putImageData(cellImgData, 0, 0)
+        if (options.debug) debugImages.push(cellCanvas.toDataURL())
+
+        if (darkCount > 15) {
+          const { data } = (await worker.recognize(cellCanvas)) as any
+          const text = data.text.trim()
+          let val = parseInt(text, 10)
+          if (isNaN(val)) {
+            const sym = data.symbols?.[0]?.text?.trim()
+            if (sym) val = parseInt(sym, 10)
+          }
+
+          if (!isNaN(val) && val >= 1 && val <= 9) {
+            grid[r][c] = val
+            cluesFound++
+          }
         }
       }
     }
 
-    if (options.debug && options.onDebugUpdate) {
-      options.onDebugUpdate(debugImages)
-    }
-
-    if (cluesFound === 0) {
-      throw new Error('No Sudoku clues were found. Use a clear picture of the grid.')
-    }
-
-    const parsedGrid = sudokuGridSchema.safeParse(grid)
-    if (!parsedGrid.success) {
-      throw new Error('The detected Sudoku grid is invalid.')
-    }
-
-    return parsedGrid.data
+    if (options.debug && options.onDebugUpdate) options.onDebugUpdate(debugImages)
+    if (cluesFound === 0) throw new Error('No Sudoku clues were detected.')
+    return sudokuGridSchema.parse(grid)
   } finally {
     await worker.terminate()
   }
