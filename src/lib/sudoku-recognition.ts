@@ -30,7 +30,15 @@ const loadImageToCanvas = (file: File): Promise<HTMLCanvasElement> => {
   })
 }
 
-export const recognizeSudoku = async (image: File): Promise<SudokuGrid> => {
+export interface RecognitionOptions {
+  debug?: boolean
+  onDebugUpdate?: (images: string[]) => void
+}
+
+export const recognizeSudoku = async (
+  image: File,
+  options: RecognitionOptions = {}
+): Promise<SudokuGrid> => {
   const canvas = await loadImageToCanvas(image)
   const ctx = canvas.getContext('2d')
   if (!ctx) {
@@ -99,6 +107,7 @@ export const recognizeSudoku = async (image: File): Promise<SudokuGrid> => {
   })
 
   const grid = createEmptyGrid()
+  const debugImages: string[] = []
   let cluesFound = 0
 
   try {
@@ -111,7 +120,10 @@ export const recognizeSudoku = async (image: File): Promise<SudokuGrid> => {
         const innerW = Math.floor(cellW * 0.64)
         const innerH = Math.floor(cellH * 0.64)
 
-        if (innerW <= 0 || innerH <= 0) continue
+        if (innerW <= 0 || innerH <= 0) {
+          if (options.debug) debugImages.push('')
+          continue
+        }
 
         // Check dark pixel count in the inner cell region
         let darkCount = 0
@@ -119,7 +131,10 @@ export const recognizeSudoku = async (image: File): Promise<SudokuGrid> => {
         cellCanvas.width = innerW
         cellCanvas.height = innerH
         const cellCtx = cellCanvas.getContext('2d')
-        if (!cellCtx) continue
+        if (!cellCtx) {
+          if (options.debug) debugImages.push('')
+          continue
+        }
 
         const cellImgData = cellCtx.createImageData(innerW, innerH)
         const cellData = cellImgData.data
@@ -150,16 +165,19 @@ export const recognizeSudoku = async (image: File): Promise<SudokuGrid> => {
           }
         }
 
+        cellCtx.putImageData(cellImgData, 0, 0)
+        if (options.debug) {
+          debugImages.push(cellCanvas.toDataURL())
+        }
+
         // If dark pixel count is small, the cell is empty
         if (darkCount < 20) {
           grid[r][c] = 0
           continue
         }
 
-        cellCtx.putImageData(cellImgData, 0, 0)
-
         // Run OCR on the thresholded digit
-        const { data } = await worker.recognize(cellCanvas)
+        const { data } = (await worker.recognize(cellCanvas)) as any
         const text = data.text.trim()
         let val = parseInt(text, 10)
 
@@ -175,6 +193,10 @@ export const recognizeSudoku = async (image: File): Promise<SudokuGrid> => {
           cluesFound++
         }
       }
+    }
+
+    if (options.debug && options.onDebugUpdate) {
+      options.onDebugUpdate(debugImages)
     }
 
     if (cluesFound === 0) {
